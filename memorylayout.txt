@@ -1,0 +1,2875 @@
+                        Memory Layout
+                    in Program Execution
+
+                             By
+
+
+                      Frédérick Giasson
+
+
+                    fred [at] fgiasson.com
+
+                        October 2001
+
+
+
+
+              Copyrights, 2001, Frédérick Giasson
+
+
+Table of Contents:
+------------------
+
+Preface
+
+Introduction
+
+Introduction Chapter 1:
+  
+1:... Program execution: The route map.
+1.1:.... The pseudo-shell code.
+1.2:.... Create a child Process.
+1.2.1:..... FORKS system call: the nine steps.
+1.3:.... Execute the program.
+1.3.1:..... C run-time, start-off procedure.
+1.3.2:..... EXEC system call, the nine steps. 
+
+
+
+Chapter 2: 
+ 
+2:... Memory layout in executed program.
+2.1:.... Dissection of the ELF executable file.
+
+
+
+Chapter 3:  
+
+3:... The Stack and the Heap.
+3.1:.... Where are they?
+3.2:.... How to know what's the size of the user stack frame at compilation?
+3.3:.... Registers.
+3.3.1:..... Generals Registers.
+3.3.2:..... Segments register.
+3.3.3:..... Offsets Registers.
+3.4:.... The stack.
+3.4.2:..... Stack management during procedure calling.
+3.4.2.1:...... The call.
+3.4.2.2:...... The Prologue.
+3.4.2.3:...... The return.
+3.5:.... The Heap. 
+
+Conclusion 
+
+Annex 1
+Annex 2
+Annex 3 
+
+Bibliography
+
+
+Preface:
+--------
+
+	This is my first article published on the web. This article is for beginners 
+and intermediates systems administrators, programmers, kernel developers, hobbyists, 
+or any other computer enthusiasts interesting in the subject.
+
+	I'm sorry for my bad English but, if you find grammar errors and are
+willing to report them, please contact me and I'll change the text with pleasures.
+
+	
+
+	If you wish to discuss of this article with me and other readers, please, 
+contact us on the discussion forum dedicated for this article:
+
+- http://www.decatomb.com/forums/viewforum.php?forum=29
+
+
+
+Introduction:
+-------------
+
+        Memory management is a hot topic in the operating system development. 
+This is an important resource of the system and need to be carefully managed.
+
+        This paper won't discuss of the whole process of the memory management 
+system. No, we'll see the point of view of the user in this MM system. We'll 
+see how a program file is executed and mapped into the memory.
+
+	Yes, there are many other parts in the MM system like: swapping, virtual 
+memory, page replacement algorithms, segmentation, etc. So, if you wish 
+understand the whole process of the MM system in an operating system, and then 
+look at the bibliography at the bottom of this document. There are many useful 
+resources about the Linux/Unix and Minix Memory Management system.
+
+        I'll use the Minix and Linux Memory management system to explain you 
+how this process works. This is practically the same schemas with other 
+ELF-based A-32 Operating Systems like NetBSD, FreeBSD, etc. Every demonstration 
+programs will be compiled with GCC under Linux and I'll also use GDB to debug 
+the Assembly code of our demonstration programs to show you how it works in a 
+low level environment.
+
+
+
+Chapter 1: Program execution: The route map:
+---------------------------------------------
+
+        It's interesting to know how an executed program is mapped in the memory 
+but, how is he executed? In the first part of this paper I'll show you how the 
+whole execution process of a program work by tracing you the route map. The starting 
+point is when the user type the program name in a shell and strike < Enter >. The 
+final step of the route is when the program is mapped in memory and ready to start.
+
+
+------
+
+[Root@Seldon prog]# helloworld < Enter >
+
+Hello World!
+
+------
+
+        Okay, I typed the name of my program to execute( helloworld ) and I pressed 
+the key < Enter >. What append between the time that I strike < Enter > and the 
+apparition of the "Hello World!" string in my console screen? Is this magic? Certainly 
+not!
+
+
+
+
+1.1: The pseudo-shell code:
+---------------------------
+
+        There is the pseudo-code of a very basic shell program:
+
+------
+#define TRUE 1
+ARRAY   command
+ARRAY   parameters
+
+while(TRUE)
+{
+        read_command_line(command,parameters);          /* We are waiting to read an input from the terminal.
+                                                           In our example, command = "helloworld"
+                                                           and parameters = "" */
+        pid_t = fork();                                 /* pid_t contain the process ID of the child process */
+        if( pid_t != 0 )                                /* If the PID isn't 0 then...
+        {                                                  Note: The PID == 0 when it's the child's thread
+                                                           of execution. */
+                /* Parent code. */
+                waitpid(-1,&status,0);                  /* The program is waiting the end of the child 
+                                                           execution ( -1 ) to continue the parent process 
+        }else{                                             ( the Shell ) */
+                /* Child Code. */
+                execve(command,parameters,0);           /* Finally, we execute our helloworld program! */
+        }
+}
+
+------
+Note 1: The execve() function is called in the child process ( when fork() == 0 )
+        and the waitpid() command is called in the parent process ( when fork() == pid_t ).
+------
+
+        You don't understand? Don't worry, I'll explain you every part
+of this pseudo-shell bellow.
+
+
+
+1.2: Create a child process:
+----------------------------
+
+        First, the program needs to create a new process to handle the execution of 
+our program. There is the ways to do this under Minix and Linux:
+
+------
+
+Minix:
+------
+do_fork()
+
+
+
+Linux:
+------
+fork()
+vfork()
+clone()
+
+------
+
+
+        Under Linux, vfork() and clone() have same functions as fork() but with some 
+difference in the process management. See at the Linux Man pages for more information 
+about these two functions ( "man clone" or "man vfork" ). We'll concentrate our efforts 
+on the fork() function. The fork() function do the same thing under Minix and Linux. 
+This function will create an exact duplicate of the parent process, including all the 
+file descriptions, variables, registers, everything. After the fork() call, the child 
+and the parent process go their separate ways. The values of all variables are the same 
+at the call of the fork() but, after him, the values of parent and child variables will 
+changes and the ones done on the parent process will not affect the ones on the child 
+process. The only thing that is shared between the parent and the child process is the 
+text section which is unchangeable.
+
+        Okay, the FORK system call is sent, the child process is created. Now before the 
+end of the fork() function, the system call will return to the program the value of the 
+child process identification ( the PID ). The PID is a signed integer variable defined 
+in types.h as:
+
+Note 1: The fork() procedure will send the FORK system call. Dont get 
+        muddled by these two concepts.
+
+
+------
+
+Minix:Source: minix/include/sys/types.h
+--
+typedef int      pid_t;
+
+
+
+Linux:Source: /posix/sys/types.h
+--
+ifndef           __pid_t_defined
+typedef int      __pid_t pid_t;
+
+------
+
+
+1.2.1: FORKS system call: the nine steps:
+-----------------------------------------
+
+There is the nine things, which the FORK system call do:
+Note 1: You'll find every of these steps in the do_fork() source code
+        in Annex 1.
+Note 2: The code for the Linux fork() function is in glibc in the
+        fork.c file.
+Note 3: The descriptions of these steps are only applicable for the Minix
+        operating system. The base is the same for Linux. The only thing
+        which really differ is how the process is created by the kernel.
+        
+        1- Check to see if process table is full. ( Lines 14 to 16 in Annex 1 )
+
+                Okay, What's the hell is this process table?
+                The process table is a part of the kernel. The declaration
+                of the table is in Annex 2. This table contains all
+                process' registers, memory map, accounting, and message to
+                send and receive.
+
+                Note 1: The number of slots in the process table is defined
+                by NR_PROCS in " /include/minix/config.h ":
+                ------
+                #define NR_PROCS 32
+                ------
+
+                Note 2: In Linux, the maximum number of process is the size
+                        of the task vector, by default he have 512 entries.
+
+        2- Try to allocate memory for the child's data and stack. ( Lines 21 to 26 in Annex 1 )
+        3- Copy the parent's data and stack to the child's memory. ( Lines 28 to 34 in Annex 1 )
+        4- Find a free process slot and copy parent's slot to it. ( Lines 36 to 38 in Annex 1 )
+        5- Enter child's memory map in process table. ( Lines 41 to 57 in Annex 1 )
+        6- Choose a pid for the child. ( Lines 60 to 69 in Annex 1 )
+
+                Note 1: Don't forget, the pid_t must be a signed integer.
+
+        7- Tell kernel and file system about child. ( Lines 71 and 72 in Annex 1 )
+
+                Why the FORK system call tell to the kernel AND the file system
+                about the newly created process? Because in Minix the process
+                management, memory management and file management are each
+                handled by separate modules. So, the process table is
+                partitioned in 3 parts, and each of these parts have fields that
+                it needs. The part of the process table involve in the memory
+                management is defined in the file "/src/mm/mproc.h". The part
+                involve in the file system is defined in the file "/src/fs/fproc.h".
+                Finally, the one involve with the kernel is defined in the Annexe 2.
+
+        8- Report child's memory map to kernel. ( Lines 74 to Lines 77 in Annex 1 )
+        9- Send reply messages to parent and child. ( Lines 80 and 81 in Annex 1 )
+
+                Note 1: The return value to the child process is 0 and the return
+                        value to the parent process is the PID of the child.
+
+
+
+
+        As we can see, the first part of a program execution called from a shell isn't 
+so simple. The FORK system call will only create a new process to handle the execution 
+of our new program started by the execve() command. So, the whole protocol of process 
+management is implicated when we call the do_fork() procedure, and, at every level of 
+the system (to the process management system, to the I/O tasks, to the server processes 
+( FS, MM and network ) and finally to the user processes). I'll not discuss of this 
+protocol in this paper because it's not is goal.
+
+
+1.3: Execute the program:
+-------------------------
+
+        Okay, we created a new process, now; we'll use this process to execute our 
+program. The execve() function call a new system call know as "EXEC system call". 
+What this system call does? He replace the current memory image with a new one and 
+setup a new stack for this new memory image.
+
+        There is the ways to execute a program under Minix and Linux:
+
+Minix:
+------
+do_exec()
+Note 1: In the /src/mm/exec.c library. There is other do_exec() functions in the
+        /src/fs/misc.c and /src/kernel/system.c library but I'll talk about them
+        later in this section.
+
+
+
+Linux:
+------
+execve()
+
+There is other variants of the exec family procedures, see man pages for more 
+information:
+
+execl()
+execlp()
+execle()
+execv()
+execvp()
+
+        Okay, we'll take in consideration that there is a hole, of the size of our 
+new image, in memory. I'll first show you how the program is handled by the EXEC 
+system call and after, show you all steps that the do_exec() function perform. 
+Same as the FORK system call, take in consideration that the following explanation 
+is only fully compatible for the Minix operating system but the base is the same 
+under the Linux OS. The handling of the EXEC system call is the same, but, under 
+Linux, the Kernel, MM and FS can handle the problem in other ways with many other 
+features specific to the Linux system but the process is the same.
+
+        There is the memory schemas that we'll use to understand the whole process 
+of EXEC when we pass the " mv hw pg " command to our shell.
+
+
+Note 1: This command will rename the file "hw" to "pr".
+
+
+
+Arrays passed to execve()
+-------------------------
+
+
+     Argument
+      Array
+ ---------------
+|       0       |
+|---------------|
+|      pr       |
+|---------------|
+|      hw       |
+|---------------|
+|      mv       |
+ ---------------
+Figure 1.0
+
+    Environment
+      Array
+ ---------------
+|       0       |
+|---------------|
+|  HOME=/root   |
+ ---------------
+Figure 1.1
+
+
+ The stack build by execve()
+ ---------------------------
+
+            3   2   1   0
+
+           ---------------
+    40    | \0| t | o | o |
+          |---------------|
+    36    | r | / | = | E |
+          |---------------|
+    32    | M | O | H | \0|
+          |---------------|
+    28    | r | p | \0| w |
+          |---------------|
+    24    | h | \0| v | m |
+          |---------------|
+    20    |      0        |
+          |---------------|
+    16    |     33        |
+          |---------------|
+    12    |      0        |
+          |---------------|
+     8    |     30        |
+          |---------------|
+     4    |     27        |
+          |---------------|
+     0    |     24        |
+           ---------------
+Figure 1.2
+
+
+
+ The stack after relocation by the memory manager:
+ ------------------------------------------------- 
+            3   2   1   0
+
+           ---------------
+  6532    | \0| t | o | o |
+          |---------------|
+  6528    | r | / | = | E |
+          |---------------|
+  6524    | M | O | H | \0|           
+          |---------------|
+  6520    | r | p | \0| w |
+          |---------------|
+  6516    | h | \0| v | m |
+          |---------------|
+  6512    |      0        |
+          |---------------|
+  6508    |     6525      |
+          |---------------|
+  6504    |      0        |
+          |---------------|
+  6500    |     6522      |
+          |---------------|
+  6496    |     6519      |
+          |---------------|
+  6492    |     6516      |
+           ---------------
+Figure 1.3
+
+
+ The stack as it appears to main() at the start of execution:
+ -------------------------------------------------------------
+
+            3   2   1   0
+
+           ---------------
+  6532    | \0| t | o | o |
+          |---------------|
+  6528    | r | / | = | E |
+          |---------------|   6524    | M | O | H | \0|
+          |---------------|
+  6520    | r | p | \0| w |
+          |---------------|
+  6516    | h | \0| v | m |
+          |---------------|
+  6512    |      0        |
+          |---------------|
+  6508    |     6525      |
+          |---------------|
+  6504    |      0        |
+          |---------------|
+  6500    |     6522      |
+          |---------------|
+  6496    |     6519      |
+          |---------------|
+  6492    |     6516      |
+          |---------------|
+  6488    |     6508      |  <-- envp
+          |---------------|
+  6484    |     6492      |  <-- argv
+          |---------------|
+  6480    |      3        |  <-- argc
+          |---------------|
+  6476    |    return     |
+           ---------------
+Figure 1.4
+
+
+
+        I'll now explain you how these stacks representations works and after 
+I'll show you all EXEC system call steps to finally have our program mapped in 
+memory.
+
+        There are two important arrays in the EXEC process. The environment 
+array (figure 1.0) and the argument array (figure 1.1). The environment array 
+is an array of string, which is passed as environment to the new program. The 
+argument array is an array of argument strings passed to the new program. These 
+two arrays need to be terminated with a NULL character ("\0"). The do_exec() 
+procedure will now build the initial stack within the shell's address space 
+(Figure 1.2, Annex 3 lines 049 to 056). Next, the procedure will call the MM and 
+this one will allocate new memory for the new created stack and release the old 
+one (Annex 3 lines 062 to 066). After the procedure will patch up the pointers 
+(Annex line 077) and now the memory from Figure 1.2 have the look of the memory 
+of the Figure 1.3. Finally, we'll save the offset to initial argc (Annex 3 line 
+112). The initial stack argument is a part of the procedures table in the memory 
+management system. There is a pointer on the initial stack in the MPROC structure 
+in the "/src/mm/mproc.h" file. The memory finally looks like the Figure 1.4. This 
+is the stack representation which will appears to main() procedure at the start 
+of execution!
+
+
+1.3.1: C run-time, start-off procedure:
+---------------------------------------
+
+        Okay, now, the program is mapped and executed. However, we have a little 
+problem. For the C compiler, the main() is just another function. The compiler 
+doesn't know that this function is the entry point of our program to execute! So 
+the compiler will compile the main() function code to access the three parameters 
+considering the standard C calling convention, last parameter first. In this case, 
+there is supposed to have three parameters ( one integer and 2 pointers ) before 
+the return address but this is not the case in our Figure 1.3. In this case, how 
+can we pass the three parameters to the main() function? We'll create a small 
+assembly code, which will be insert in the front head of our program. The code is 
+called C run-time, start-off procedure, CRTSO, and his general goal is to put three 
+more dwords on the stack and call the main() function with standard call instruction:
+
+        -DWord 1:
+                 ARGC: The number of parameters passed to the function.
+                         Type: Integer
+                         Note 1: Adress 0x6476 on Figure 1.4
+        -DWord 2:
+                 ARGV: Pointer on parameters array string.
+                         Type: Pointer
+                         Note 1: Adress 0x6484 and pointer on 0x6492 on Figure 1.4
+        -DWord 3:
+                 ENVP: Pointer on the environment array string.
+                         Type: Pointer
+                         Note 1: Adress 0x6488 and pointer on 0x6508 on Figure 1.4
+
+These three dwords are represented in the Figure 1.4. Okay, there is an assembly 
+procedure called CRTSO, but what look like this procedure? Let the hunt begin! The 
+GDB hunting ground is now open!
+
+
+Let us first import our test program ("crtso") in GDB.
+
+-----
+(gdb) file crtso
+Reading symbols from crtso...done.
+-----
+
+Okay, now, we don't have any ideas of where to start to find this legend in the 
+ground. In this case, let us start a point 0, this is the only point that we know 
+his existence.
+
+-----
+(gdb) disassemble main
+Dump of assembler code for function main:
+0x80481e0 <main>:       push   %ebp
+...
+0x80481eb <main+11>:    call   0x8048498 <exit>
+End of assembler dump.
+-----
+
+There is no information about the CRTSO location.
+
+I have an idea. We'll track him in the program by following each function addresses 
+-1 dword, in this case, we'll have the address of the previous function. If we do 
+this to each functions, we'll probably find the root procedure, the CRTSO!
+
+Let's begin the tracking with this new method.
+
+-----
+(gdb) disassemble main-1
+Dump of assembler code for function init_dummy:
+0x80481d0 <init_dummy>: push   %ebp
+...
+0x80481da <init_dummy+10>:      lea    0x0(%esi),%esi
+End of assembler dump.
+-----
+
+We found the frame_dummy function at adress 0x80481d0 -1.
+
+-----
+(gdb) disassemble init_dummy-1
+Dump of assembler code for function frame_dummy:
+0x80481a0 <frame_dummy>:        push   %ebp
+...
+0x80481c9 <frame_dummy+41>:     lea    0x0(%esi,1),%esi
+End of assembler dump.
+-----
+
+We found the fini_dummy fonction at 0x80481a0 -1.
+
+-----
+(gdb) disassemble frame_dummy-1
+Dump of assembler code for function fini_dummy:
+0x8048190 <fini_dummy>: push   %ebp
+...
+0x804819a <fini_dummy+10>:      lea    0x0(%esi),%esi
+End of assembler dump.
+-----
+
+We found the __do_global_dtors_aux fonction at 0x8048190 -1
+
+-----
+(gdb) disassemble fini_dummy-1
+Dump of assembler code for function __do_global_dtors_aux:
+0x8048130 <__do_global_dtors_aux>:      push   %ebp
+...
+0x804818d <__do_global_dtors_aux+93>:   lea    0x0(%esi),%esi
+End of assembler dump.
+-----
+
+We found the call_gmon_start fonction at 0x8048130 -1
+
+-----
+(gdb) disassemble __do_global_dtors_aux-1
+Dump of assembler code for function call_gmon_start:
+0x8048104 <call_gmon_start>:    push   %ebp
+...
+0x804812f <call_gmon_start+43>: nop
+End of assembler dump.
+-----
+
+We found the _start fonction at 0x8048104 -1
+
+Hummm, that's an interesting function, that's not?
+
+We found it!
+
+-----
+(gdb) disassemble call_gmon_start-1
+Dump of assembler code for function _start:
+0x80480e0 <_start>:     xor    %ebp,%ebp
+0x80480e2 <_start+2>:   pop    %esi
+0x80480e3 <_start+3>:   mov    %esp,%ecx
+0x80480e5 <_start+5>:   and    $0xfffffff0,%esp
+0x80480e8 <_start+8>:   push   %eax
+0x80480e9 <_start+9>:   push   %esp
+0x80480ea <_start+10>:  push   %edx
+0x80480eb <_start+11>:  push   $0x808e220
+0x80480f0 <_start+16>:  push   $0x80480b4
+0x80480f5 <_start+21>:  push   %ecx
+0x80480f6 <_start+22>:  push   %esi
+0x80480f7 <_start+23>:  push   $0x80481e0
+0x80480fc <_start+28>:  call   0x80481f0 <__libc_start_main>
+0x8048101 <_start+33>:  hlt
+0x8048102 <_start+34>:  mov    %esi,%esi
+End of assembler dump.
+-----
+
+The CRTSO will put the three parameters on the stack by performing three 
+push commands:
+
+0x80480e8 <_start+8>:   push   %eax       ! push argc ( integer )
+0x80480ea <_start+10>:  push   %edx       ! push argv ( pointer )
+0x80480f5 <_start+21>:  push   %ecx       ! push envp ( pointer )
+
+after, the CRTSO will execute the __libc_start_main function (visible in the
+libc.so.6 library). Than, the __libc_start_main will call the __libc_init_first
+function and this function will call _init. Then it arrange _fini to be called
+when the program exit.
+
+finally, 0x8048101 <_start+33>:  hlt, is called to force a trap if exit fails.
+
+After this, all parameters will be on the stack and the main() function of
+our program will have access to these parameters as shown in the Figure 1.4.
+
+
+1.3.2: EXEC system call, the nine steps:
+----------------------------------------
+
+        Now, I'll explain every steps of the EXEC system call. There are nine 
+important steps to have the program mapped in memory and executed.
+
+
+        1- First, check for memory and check if the file is executable.( Lines 24 to 37 in Annex 3 )
+
+                The file execution is in relation with the MM then, the MM
+                will inform the FS by the tell_fs() procedure to switch to
+                the user's working directory rather than to MM's. The
+                execution of the program will be done by the MM allowed()
+                function.
+
+        2- Read the header to get the segment and total size.( Lines 40 to 46 in Annex 3 )
+        3- Fetch the arguments and environment from the caller.( Lines 49 to 56 in Annex 3 )
+        4- Allocate new memory and release unneeded old memory.( Lines 62 to 66 in Annex 3 )
+
+                Before doing this, we'll check, with the find_shared() procedure ( line 59 in
+                Annex 3 ), if the text version is not already loaded in memory and able to
+                be shared with another process. After, we'll call the new_mem() function.
+                This function will check in the memory to find a hole big enought for our
+                new memory image( there, the data and stack section of our application if
+                we find an accesseble text section to share in the memory ). After, memory
+                maps are updated and the sys_newmap() function will report chages to the
+                Kernel.
+                        Note 1: If the new_mem() procedure don't find one hole big enough
+                                for one, two or three sections, the program won't be executed.
+
+                                A way to increase this procedure will be to put the data,
+                                code and text sections in three different holes and link them together
+                                but this isn't the case of the Minix operating system.
+
+                                Therefore, this is the case in Linux. First, the data section and
+                                the code section could be in different virtual memory holes.
+                                The fact is that under Linux there is an intermediate memory
+                                heaven between the process and the physical memory called
+                                the process's virtual memory (PVM). They are linked together
+                                with the vm_area_struct structure. This structure is a part
+                                of the mm_struct structure and this one is a part of the
+                                task_struct ( the vector with all running processes ). But,
+                                this procedure is also upgraded by a technique called "demand
+                                paging" where the virtual memory of a process is brought into
+                                physical memory only when a process attempts to use it!
+
+                        Note 2: The new_mem() function will zeroing the bss segment(this
+                                segment is a part of the data segment. The bss contains all
+                                uninitialised global variables. I'll talk about this segment
+                                bellow when I'll talk about the Memory Layout of the
+                                application in memory.), the gap and the stack segment.
+
+                                Note 2.1: The gap is a memory segment between the bss and the
+                                stack segment, which will allow them to allocate more memory. I'll
+                                also talk about this segment in the Memory Layout chapter. Another
+                                name give to the gap is the user stack frame.
+
+        5- Copy stack to new memory. ( lines 74 to 81 in Annex 3 )
+
+
+                The whole stack will be recopied in a new memory region, the user's memory region.
+                After, the patch_ptr() function (Line 077 Annex 3) will patch all pointers to
+                point to the new memory allocation ( the real place in physical memory and not the
+                virtual 0 ). Now, we passed from the Figure 1.2 to Figure 1.3.
+
+        6- Copy data ( and possibly text ) segment to new memory image. ( Lines 84 to 89 in Annex 1 )
+
+                The copying of the text segment will depend of the return value of the find_shared()
+                fonction. If there is no text segment corresponding with ours already running in
+                the memory, the return value will be NULL. Otherwise, the find_shared() procedure will
+                return the pointer of the corresponding MPROC structure in the memory.
+
+                                Note 1: The MPROC structure is defined in the /src/mm/mproc.h file.
+                                Note 2: The 3 variables involve in the MPROC structure are:
+
+                                        ino_t  mp_ino;       /* inode number of file */
+                                        dev_t  mp_dev;       /* device number of file system */
+                                        time_t mp_ctime;     /* inode changed time */
+
+                After, if the sh_mp structure ( mproc ) is NULL then, load_seg() will load
+                the text segment in memory and after the load_seg() procedure will be
+                recalled and will load the data segment in memory.
+
+        7- Check for and handle setuid, setgid bits.( Lines 100 to 109 in Annex 3 )
+        8- Fix up process table entry. ( Lines 115 to 127 in Annex 1 )
+
+                There the EXEC call will fix all fields of MPROC with the new memory allocations
+                of our user process.
+
+        9- Tel kernel that process is now runnable.( Lines 115 to 127 in Annex 3 )
+
+                Finally the process will be announced by the do_exec() procedure in
+                "/src/kernel/system.c" which handle the sys_exec(). The SYS_EXEC
+                message is defined in "/include/minix/com.h". This message will
+                sets program counter and stack pointer after the EXEC system call.
+
+
+
+        Our application ( helloworld ) called by the shell is definitely executed 
+and mapped in the user memory. In next chapter, I'll show you how the program is 
+mapped in the memory.
+
+
+Chapter 2: Memory Layout of an executed program:
+------------------------------------------------
+
+        A program is composed of variables, local and global, static and dynamic, procedures
+and structure. But, how are they mapped in memory? How it works?
+
+        Note 1: All information in this chapter will be applicable for the ELF executable
+                file format. In this case, all information bellow will be applicable for
+                the Linux operating system and other IA-32 ELF-based operating systems like
+                OpenBSD, NetBSD, etc.
+
+
+        There is a basic layout of a program in memory:
+
+
+         ---------------
+        |               |
+        | Arguments and |
+        |  environment  |
+        |   variables   |
+        |               |
+        |---------------|
+        |     Stack     |<--|--
+        |(grow downward)|   |
+        |               |   |User
+        |               |   |Stack
+        |               |   |Frame
+        |               |   |
+        | (grow upward) |   |( Mind the Gap )
+        |      Heap     |<--|--
+        |---------------|
+        |      BSS      |
+        |---------------|
+        |      Data     |
+        |---------------|
+        |      Code     |
+         ---------------
+        Figure 1.5
+
+
+        There is a C code, which will explain how variables are mapped in the memory.
+
+varinmem.c
+-------------------
+
+        int  iGlobalInit = 1;                                   /* Global Initialized:   .data */
+        int  iGlobalUnInit;                                     /* Global Uninitialized: .bss  */
+        char *szGlobalP;                                        /* Global Uninitialized: .bss  */
+
+        void function(char cArgument)
+        {
+                int  iLocalInit = 1;                            /* Local Initialized:     stack */
+                int  iLocalUnInit;                              /* Local Uninitialized:   stack */
+                char szLocalP[12] = "Hello World!";             /* Local Initialized:     stack */
+
+                szGlobalP = (char*)malloc( 12 * sizeof(char));  /* Dynamic Variable:      heap  */
+                strncpy(szGlobalP,"Hello World!",12);
+        }
+
+        int main(void)
+        {
+                function(0);                                    /* Function call: new environment */
+        }
+
+------
+
+I'll compile this code with debugging information for GDB:
+
+[root@Seldon prog]# gcc -o varinmem -ggdb -static varinmem.c
+
+Note 1: Every program in this paper will be compiled with these parameters.
+
+
+2.1: The dissection of the ELF executable file:
+-----------------------------------------------
+
+        There are all section headers of our varinmem program:
+
+
+[root@Seldon prog]# readelf -e varinmem
+
+...
+
+Table 1:
+--------
+
+Section Headers:
+  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            00000000 000000 000000 00      0   0  0
+  [ 1] .init             PROGBITS        080480b4 0000b4 000018 00  AX  0   0  4
+  [ 2] .text             PROGBITS        080480e0 0000e0 046220 00  AX  0   0 32
+  [ 3] .fini             PROGBITS        0808e300 046300 00001e 00  AX  0   0  4
+  [ 4] .rodata           PROGBITS        0808e320 046320 00da80 00   A  0   0 32
+  [ 5] __libc_subinit    PROGBITS        0809bda0 053da0 000008 00   A  0   0  4
+  [ 6] __libc_subfreeres PROGBITS        0809bda8 053da8 00003c 00   A  0   0  4
+  [ 7] __libc_atexit     PROGBITS        0809bde4 053de4 000004 00   A  0   0  4
+  [ 8] .data             PROGBITS        0809ce00 053e00 001220 00  WA  0   0 32
+  [ 9] .eh_frame         PROGBITS        0809e020 055020 000d40 00  WA  0   0  4
+  [10] .ctors            PROGBITS        0809ed60 055d60 000008 00  WA  0   0  4
+  [11] .dtors            PROGBITS        0809ed68 055d68 000008 00  WA  0   0  4
+  [12] .got              PROGBITS        0809ed70 055d70 000010 04  WA  0   0  4
+  [13] .sbss             PROGBITS        0809ed80 055d80 000000 00   W  0   0  1
+  [14] .bss              NOBITS          0809ed80 055d80 000f44 00  WA  0   0 32
+  [15] .stab             PROGBITS        00000000 055d80 0cf030 0c     16   0  4
+  [16] .stabstr          STRTAB          00000000 124db0 059911 00      0   0  1
+  [17] .comment          PROGBITS        00000000 17e6c1 002e9e 00      0   0  1
+  [18] .debug_aranges    PROGBITS        00000000 18155f 000020 00      0   0  1
+  [19] .debug_pubnames   PROGBITS        00000000 18157f 000058 00      0   0  1
+  [20] .debug_info       PROGBITS        00000000 1815d7 000198 00      0   0  1
+  [21] .debug_abbrev     PROGBITS        00000000 18176f 0000c0 00      0   0  1
+  [22] .debug_line       PROGBITS        00000000 18182f 00007e 00      0   0  1
+  [23] .note.ABI-tag     NOTE            08048094 000094 000020 00   A  0   0  4
+  [24] .note             NOTE            00000000 1818ad 001144 00      0   0  1
+  [25] .shstrtab         STRTAB          00000000 1829f1 000103 00      0   0  1
+  [26] .symtab           SYMTAB          00000000 182f54 005aa0 10     27 26d  4
+  [27] .strtab           STRTAB          00000000 1889f4 004b48 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings)
+  I (info), L (link order), G (group), x (unknown)
+  O (extra OS processing required) o (OS specific), p (processor specific)
+
+...
+
+
+Table 2:
+--------
+
+        Description of most important sections
+        --------------------------------------
+
+.interp   <-----| Path name for a program interpreter
+.hash     <-----| Symbol hash table
+.dynsym   <-----| Dynamic Linking symbol table
+.dynstr   <-----| Strings needed for dynamic linking
+.init     <-----| Process initialisation code
+.plt      <-----| Procedure linkage table
+.text     <-----| Executable instructions
+.fini     <-----| Process termination code
+.rodata   <-----| read-only data
+.data     <-----| Initialised data present in process image
+.got      <-----| Global offset table
+.dynamic  <-----| Dynamic linking information
+.bss      <-----| Uninitialised data present in process image
+.stabstr  <-----| Usually names associated with symbol table entries
+.comment  <-----| Version control informations
+.note     <-----| File notes
+
+--------
+
+        We now have every sections of our program with a description of every
+important ones. There are both address and size for each header sections. Now,
+we'll have a look at what contain these sections. For this, I'll use GDB.
+
+
+Let's start with the .init header section:
+
+-----
+[root@Seldon prog]# readelf -x 1 varinmem
+
+Hex dump of section '.init':
+  0x080480b4 0000dbe8 90000000 45e808ec 83e58955 U......E........
+  0x080480c4                   c3c90004 61b6e800 ...a....
+-----
+
+The readelf program show to us the Hex dumps of the .init section of our varinmem 
+program. Okay, these informations are extract directly from the binary file. But, 
+can we find what this hex segment hide? We'll use GDB to see if we can access to 
+the assembly code of the .init section at the start address: 0x080440b4.
+
+-----
+(gdb) file varinmem
+Reading symbols from varinmem...done.
+(gdb) disassemble 0x080480b4
+Dump of assembler code for function _init:
+0x80480b4 <_init>:      push   %ebp
+0x80480b5 <_init+1>:    mov    %esp,%ebp
+0x80480b7 <_init+3>:    sub    $0x8,%esp
+0x80480ba <_init+6>:    call   0x8048104 <call_gmon_start>
+0x80480bf <_init+11>:   nop
+0x80480c0 <_init+12>:   call   0x80481a0 <frame_dummy>
+0x80480c5 <_init+17>:   call   0x808e280 <__do_global_ctors_aux>
+0x80480ca <_init+22>:   leave
+0x80480cb <_init+23>:   ret
+End of assembler dump.
+-----
+
+We got it! the .init header segment is composed of the _init function. Don't 
+forgot, this is not the CRTSO, this routine will initialise our program and not 
+start him! In this case, in which segment is situated our _start procedure?
+
+-----
+
+(gdb) disassemble _start
+Dump of assembler code for function _start:
+0x80480e0 <_start>:     xor    %ebp,%ebp
+...
+0x8048102 <_start+34>:  mov    %esi,%esi
+End of assembler dump.
+
+-----
+
+The _start function code start at address 0x80480e0. Now, come back at our
+header sections ( Table 2 ) and see where is situated this address:
+
+-----
+
+  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al
+  [ 2] .text             PROGBITS        080480e0 0000e0 046220 00  AX  0   0 32
+
+-----
+
+Humm, the starting address is the same! We got it! The CRTSO procedure is the
+first procedure of the .text section!
+
+Now, we'll look at the .data segment. There is supposed to be all initialised 
+data in the process image.
+
+-----
+
+[root@Seldon prog]# readelf -x 8 varinmem
+
+Hex dump of section '.data':
+  0x0809ce00 00000000 0809ed6c 00000000 00000000 ........l.......
+  0x0809ce10 00000000 00000000 0809edc0 00000001 ................
+...
+  0x0809e010 00000000 0000003f 3f783020 65707974 type 0x??.......
+
+-----
+
+(gdb) disassemble 0x0809ce10
+Dump of assembler code for function iGlobalInit:
+0x809ce10 <iGlobalInit>:        add    %eax,(%eax)
+0x809ce12 <iGlobalInit+2>:      add    %al,(%eax)
+End of assembler dump.
+
+-----
+
+        If we disassemble the first address of the .data section we'll see the 
+data_start procedure. But, if we continue with the next address ( 0x809ce12 ) 
+we'll see an interesting thing! Is there our iGlobalInit variable initialised 
+to 1 ( see memorylayout.c )? Yes it is! We just found where are put every  
+initialised global variable of our program! Okay, but, where are ours iGlobalUnInit 
+and szGlobalP variable? They are global no?
+
+
+..Tap...Tap...Tap...Tap...Arg...Tap...Tap...cant find it...Tap...Tap...
+many many time later...
+Tap...Tap...Tap........
+
+        Hummmmm hard to find no? There is another feature of GDB which will help you in
+your researches:
+
+-----
+
+(gdb) file varinmem
+Reading symbols from varinmem...done.
+(gdb) list 1
+1       int  iGlobalInit = 1;
+2       int  iGlobalUnInit;
+3       char *szGlobalP;
+
+-----
+
+(gdb) print &szGlobalP
+$1 = (char **) 0x809f7a4
+
+-----
+
+(gdb) info symbol 0x809f7a4
+szGlobalP in section .bss
+
+-----
+
+(gdb) disassemble 0x809f7a4
+Dump of assembler code for function szGlobalP:
+0x809f7a4 <szGlobalP>:  add    %al,(%eax)
+0x809f7a6 <szGlobalP+2>:        add    %al,(%eax)
+End of assembler dump.
+
+-----
+
+(gdb) disassemble 0x809f7a4-1
+Dump of assembler code for function iGlobalUnInit:
+0x809f7a0 <iGlobalUnInit>:      add    %al,(%eax)
+0x809f7a2 <iGlobalUnInit+2>:    add    %al,(%eax)
+End of assembler dump.
+
+-----
+
+        We got it guys! First, I listed the source code of our program to see my
+global variables. After I used the print GDB command with the "&" symbol to get 
+the memory reference of my szGlobalP pointer in the program (Use the "help print" 
+command for more information about the print command). After, I used the "info 
+symbol" command to know  if my variable is present in a symbol. I found that 
+szGlobalP is present in the .bss header section. After I disassembled the code at 
+the szGlobalP address to see if there is anything. I found the declaration of my 
+szGlobalP pointer! After, I was curious to know what's declared before this address. 
+It's why I disassembled the address before the beginning of the szGlobalP pointer's 
+address. What a surprise, I found my iGlobalUnInit uninitialised variable declaration!
+
+        Okay, I think it's the time to jump in the next chapter.
+
+        In conclusion, if you wish to discover other header sections, don't hesitate 
+and continue with the techniques above. Use the "readelf" program to find where 
+every segment starts and stop and after open your program ( the program need to be 
+compiled with debug information for GDB ) with GDB and disassemble addresses of 
+segments! I'm sure that you'll find many interesting things by scrounging the code 
+like this!
+
+
+Chapter 3: The Stack and the Heap:
+----------------------------------
+
+        Now have two problems. Local variables and dynamic variables. The solution 
+form these two problems are the two parts of the user stack frame ( You mind the gap? ). 
+The stack and the heap fields.
+
+        Why initialised local variables and unitialised ones aren't respectively 
+addressed in the .data and .bss at the compilation as global variables? It's for the 
+same reason why Linux don't load every procedure in memory at the program execution 
+(see chapter 1.3 - EXEC step 4 - note 1)! If you have a heavy program to execute with 
+many hundreds of procedures, each with many local variables and, you only use 10 or 20 
+of these procedures. In this case there will be many thousands of initialised variables, 
+which will never be used during the program execution. Do you imagine the important 
+lost of memory space just for one executed program? Report this for 5 or 10 running 
+programs on the workstation and this will going crazy! This is the main reason why the 
+compilator don't allocate the memory for these local variables. In this case, where are 
+they addressed? It's the topic of this chapter. We'll see how functions (with his 
+arguments, local variables) and dynamic variables are mapped in memory.
+
+        I'll first explain something about pointers and dynamic variables. In fact, a 
+pointer represent a 32bits address in the memory on a typical IA-32 PC workstation. 
+In this case, a dynamic variable represent the memory zone targeted by a pointer, and, 
+the pointer is the address!
+
+        I'll show you how pointers and dynamic variables work by the following 
+demonstration with GDB:
+
+-----
+
+(gdb) list
+8          int  iLocalUnInit;
+9          char szLocalP[12] = "Hello World!";
+10
+11         szGlobalP = (char*)malloc( 12 * sizeof(char));
+12         strncpy(szGlobalP,"Hello World!",12);
+13      }
+(gdb) break 13
+Breakpoint 1 at 0x8048231: file memorylayout.c, line 13.
+
+-----
+
+I first listed my source lines to know at which one I need to put my breakpoint 
+to have my dynamic variable initialised. After I putted a breakpoint at line 13.
+
+-----
+
+(gdb)  run
+Starting program: /root/prog/varinmem
+
+Breakpoint 1, function (cArgument=0 '\000') at varinmem.c:13
+13      }
+
+-----
+
+After I executed the program and he have stopped at the breakpoint.
+
+-----
+
+(gdb) print szGlobalP
+$1 = 0x809ff88 "Hello World!"
+
+-----
+
+Okay, I have my "Hello World!" string at address 0x809ff88. Now I'll check to know
+where is declared this memory zone ( a variable? ):
+
+-----
+
+(gdb) info symbol 0x809ff88
+No symbol matches 0x809ff88.
+
+-----
+
+Oups, there is no defined symbol at this address!
+
+-----
+
+(gdb) print &szGlobalP
+$2 = (char **) 0x809f7a4
+
+-----
+
+Okay, I found my pointer address.
+
+-----
+
+(gdb) info symbol 0x809f7a4
+szGlobalP in section .bss
+
+-----
+
+My pointer is always in my .bss segment. Now we know that the 0x809ff88 address is the
+cluster where the "Hello World!" string is. It's why this is not a defined symbol.
+It's why we'll say that the dynamic variable is the memory zone targeted by a pointer,
+and, the pointer is this address!
+
+Note 1: As you'll se in the section 3.5, these memory clusters are allocated in the heap
+        section of the user stack frame.
+
+
+3.1: Where are they?
+--------------------
+
+        Has you know, local and dynamic variables are situated in a reserved memory 
+zone called the "user stack frame". This zone is dynamically administrated. In fact, 
+some parts of the zone will be created and suppressed at the top (the stack) and at the 
+button (the heap) every time that a function is finished or the content of a dynamic 
+variable change. The environment of a called function, including parameters and local 
+variables, is created in the stack part of the USF. At the opposite of the USF zone, 
+dynamic variables are created in the heap section.
+
+3.2: How to know what's the size of the user stack frame at compilation?
+------------------------------------------------------------------------
+
+        If you are using a processor newer then the 8088 ( this is probably the case ) 
+there is a trap system to prevent stack overflow in hardware. In fact, the program will 
+allocate a certain amount of space for the user stack frame but, if the stack try to 
+grow beyond this amount, a trap to the operating system will occur, and the operating 
+system will try to allocate another memory zone for the stack, if possible.
+
+3.3: Registers:
+---------------
+
+        Before jumping in the explanation of the stack and the heap, I'll enumerate and 
+briefly explain you them functions.
+
+        A register is a part of a processor which the only utility is to hold many type 
+of values. They are a direct link between the processor and the memory.
+
+3.3.1: General Registers:
+-----------------------
+
+        These registers can be used to hold and manipulate data but some of them are 
+specialised for some task.
+
+
+        A 32bit general registers representation:
+        ----------------------------------------
+
+         ------------------------------------------
+        |   Low    |   High   |                    |
+        |          |          |                    |
+        |    8     |    8     |                    |
+        |   Bits   |   Bits   |                    |
+        |          |          |                    |
+         ------------------------------------------
+        ^                     ^                    ^
+        |   First 16 bits     |  Extended 16 Bits  |
+
+        Figure 1.6
+
+
+        %EBX representation example:
+        ----------------------------
+
+         ------------------------------------------
+        |    %BL   |    %BH   |                    |
+        |------------------------------------------|
+        |          %BX        |                    |
+        |------------------------------------------|
+        |                    %EBX                  |
+         ------------------------------------------
+        Figure 3.0
+
+
+        There was a revolution in the home computing technologies with the arrival of 
+the new Intel 386 with his 32 bits microprocessor. Old 16 bit processors had general 
+registers with a length of 16 bits ( %BX ). These 16 bits was composed of two 8 bits 
+subdivision. There were the low 8 bits ( %BL ) and the high 8 bits ( %BH ). But, with 
+the new arrival of this monster of speed, general registers was extended with a new 16 
+bits and the whole register was now called %EBX. The "E" stands for "Extended."
+
+        %EAX: No specialisation.
+        %EBX: Specialized for the index addressing management.
+        %ECX: Specialized for loops management.
+
+                EX:         MOV  %ECX,10
+                    EXLOOP: ADD  %EAX,10
+                            LOOP EXLOOP   ;ECX = ECX-1; The loop will stop when %EXC == 0
+
+        %EDX: Specialized in multiplication/division of unsigned numbers.
+
+
+3.3.2: Segments registers:
+--------------------------
+
+        %CS: This is the code segment. This is a reference to the executable code of the
+             running application. His value can be changed by the CALL, JMP, Jxx or
+             POP %CS instruction.
+        %SS: This is the stack segment. This segment is associate with the SP and BP
+             segments. This register will stock temporary all data of the microprocessor
+             in the case of function call.
+        %ES: This is the extra segment. He is exploited by the processor for strings
+             management. In this case, ES and DI will target the destination address.
+        %DS: This is the data segment linked with all other segment except SP, BP and IP.
+        %FS: Same as ES.
+        %GS: Same as ES.
+
+
+3.3.3: Offset Registers:
+------------------------
+
+        %ESP: Extended Stack Pointer, this is the top of our stack.
+        %EBP: Extended Base pointer, will target the start of the local environment of a
+              function.
+        %EDI: Extended Destination Index, hold the offset in a operation using a memory block.
+        %ESI: Extended Source Index, will target the beginning of the memory block when an
+              operation use it.
+        %EIP: Extended Instruction Pointer, target the address of the next instruction to execute.
+
+
+
+3.4: The stack:
+---------------
+
+        Every times that a function is called, we'll need to create a new environment 
+for him in the stack. We'll create a place to push parameters and local variables 
+values. In reality, the spirit of the function is this small part of the stack where 
+values are hold and changed. The rest of the function (all instructions) is in the 
+.text header section.
+
+
+        I'll use the code bellow to explain every aspects of the stack and heap 
+management when a function, a pointer or a dynamic variable is called.
+
+funcinmem.c
+-----------
+
+int  iGlobalInit = 1;
+int  iGlobalUnInit;
+char *szGlobalP;
+
+void function(char *cParameter, int iParameter)
+{
+   int  iLocalInit = 1;
+   int  iLocalUnInit;    char szHelloString[12] = "Hello World!";
+   char *szLocalP;
+
+   iParameter = 5;
+
+   iLocalUnInit  = iParameter;
+   iGlobalUnInit = iLocalUnInit+1;
+
+   szGlobalP = (char*)malloc( 12 * sizeof(char));
+   strncpy(szGlobalP,"Hello World!",12);
+
+   szLocalP = (char*)malloc( 12 * sizeof(char));
+   strncpy(szLocalP,"Hello World!",12);
+
+   return;
+}
+
+int main(int argc, char **argv)
+{
+   int iMainLocalInit = 2;
+
+   function("test",0);
+
+   iMainLocalInit += 1;
+   iGlobalInit += iMainLocalInit;
+
+   printf("iMainLocalInit = %d\n",iMainLocalInit);
+}
+
+------
+
+
+
+3.4.2: Stack management when calling a procedure:
+-------------------------------------------------
+
+        A function is devised in three principal parts:
+
+        1- The function call: All parameters are push on the stack and the instruction
+           pointer ( IP ) is saved to continue instruction processing after our function
+           call.
+        2- The Prologue: At the function starting, we'll save the state of the stack
+           as appeared before the function starting. After, we'll reserve the good among
+           of memory for our further function call.
+        3- The function return: Putting everything as appeared before the function call.
+
+        Now, let us disassemble our main() and function() procedures.
+
+		Note 1: I'll refer to these listening all the time in this chapter. Don't hesitate
+		        to look at them.
+
+------
+
+(gdb) disassemble main
+Dump of assembler code for function main:
+0x8048270 <main>:       push   %ebp
+0x8048271 <main+1>:     mov    %esp,%ebp
+0x8048273 <main+3>:     sub    $0x8,%esp
+0x8048276 <main+6>:     movl   $0x2,0xfffffffc(%ebp)
+0x804827d <main+13>:    sub    $0x8,%esp
+0x8048280 <main+16>:    push   $0x0
+0x8048282 <main+18>:    push   $0x808e3d5
+0x8048287 <main+23>:    call   0x80481e0 <function>
+0x804828c <main+28>:    add    $0x10,%esp
+0x804828f <main+31>:    lea    0xfffffffc(%ebp),%eax
+0x8048292 <main+34>:    incl   (%eax)
+0x8048294 <main+36>:    mov    0xfffffffc(%ebp),%eax
+0x8048297 <main+39>:    add    %eax,0x809cef0
+0x804829d <main+45>:    sub    $0x8,%esp
+0x80482a0 <main+48>:    pushl  0xfffffffc(%ebp)
+0x80482a3 <main+51>:    push   $0x808e3da
+0x80482a8 <main+56>:    call   0x804872c <printf>
+0x80482ad <main+61>:    add    $0x10,%esp
+0x80482b0 <main+64>:    leave
+0x80482b1 <main+65>:    ret
+End of assembler dump.
+
+------
+
+
+------
+
+(gdb) file funcinmem
+Reading symbols from funcinmem...done.
+(gdb) disassemble function
+Dump of assembler code for function function:
+0x80481e0 <function>:   push   %ebp
+0x80481e1 <function+1>: mov    %esp,%ebp
+0x80481e3 <function+3>: push   %edi
+0x80481e4 <function+4>: push   %esi
+0x80481e5 <function+5>: sub    $0x30,%esp
+0x80481e8 <function+8>: movl   $0x1,0xfffffff4(%ebp)
+0x80481ef <function+15>:        lea    0xffffffd8(%ebp),%edi
+0x80481f2 <function+18>:        mov    $0x808e3c8,%esi
+0x80481f7 <function+23>:        cld
+0x80481f8 <function+24>:        mov    $0x3,%ecx
+0x80481fd <function+29>:        repz movsl %ds:(%esi),%es:(%edi)
+0x80481ff <function+31>:        movl   $0x5,0xc(%ebp)
+0x8048206 <function+38>:        mov    0xc(%ebp),%eax
+0x8048209 <function+41>:        mov    %eax,0xfffffff0(%ebp)
+0x804820c <function+44>:        mov    0xfffffff0(%ebp),%eax
+0x804820f <function+47>:        inc    %eax
+0x8048210 <function+48>:        mov    %eax,0x809f8c4
+0x8048215 <function+53>:        sub    $0xc,%esp
+0x8048218 <function+56>:        push   $0xc
+0x804821a <function+58>:        call   0x8048d78 <__libc_malloc>
+0x804821f <function+63>:        add    $0x10,%esp
+0x8048222 <function+66>:        mov    %eax,%eax
+0x8048224 <function+68>:        mov    %eax,0x809f8c8
+0x8048229 <function+73>:        sub    $0x4,%esp
+0x804822c <function+76>:        push   $0xc
+0x804822e <function+78>:        push   $0x808e3c8
+0x8048233 <function+83>:        pushl  0x809f8c8
+0x8048239 <function+89>:        call   0x804cbdc <strncpy>
+0x804823e <function+94>:        add    $0x10,%esp
+0x8048241 <function+97>:        sub    $0xc,%esp
+0x8048244 <function+100>:       push   $0xc
+0x8048246 <function+102>:       call   0x8048d78 <__libc_malloc>
+0x804824b <function+107>:       add    $0x10,%esp
+0x804824e <function+110>:       mov    %eax,%eax
+0x8048250 <function+112>:       mov    %eax,0xffffffd4(%ebp)
+0x8048253 <function+115>:       sub    $0x4,%esp
+0x8048256 <function+118>:       push   $0xc
+0x8048258 <function+120>:       push   $0x808e3c8
+0x804825d <function+125>:       pushl  0xffffffd4(%ebp)
+0x8048260 <function+128>:       call   0x804cbdc <strncpy>
+0x8048265 <function+133>:       add    $0x10,%esp
+0x8048268 <function+136>:       lea    0xfffffff8(%ebp),%esp
+0x804826b <function+139>:       pop    %esi
+0x804826c <function+140>:       pop    %edi
+0x804826d <function+141>:       pop    %ebp
+0x804826e <function+142>:       ret
+End of assembler dump.
+
+------
+
+
+
+
+3.4.2.1: The call:
+------------------
+
+ This is the assembly code of our function call:
+ -----------------------------------------------
+
+ 0x8048280 <main+16>:    push   $0x0
+ 0x8048282 <main+18>:    push   $0x808e3d5
+ 0x8048287 <main+23>:    call   0x80481e0 <function>
+
+ ------
+
+        The function call procedure will pass all arguments to the called function 
+and will save the address memory (%EIP) of where the function was called to continue 
+the normal program execution after the called function return.
+
+        Okay, let's GDB rocks:
+
+------
+
+(gdb) break *0x8048280
+Breakpoint 1 at 0x8048280: file funcinmem.c, line 30.
+
+(gdb) run
+Starting program: /root/prog/funcinmem
+
+Breakpoint 1, 0x08048280 in main (argc=1, argv=0xbffffa84) at funcinmem.c:30
+warning: Source file is more recent than executable.
+
+30         function("test",0);
+
+(gdb) info register esp
+esp            0xbffffa08       0xbffffa08
+
+(gdb) stepi
+0x08048282      30         function("test",0);
+
+(gdb) info register esp
+esp            0xbffffa04       0xbffffa04
+
+(gdb) stepi
+0x08048287      30         function("test",0);
+
+(gdb) info register esp
+esp            0xbffffa00       0xbffffa00
+
+------
+
+  First, I putted a breakpoint at the "push   $0x0" command to stop GDB before
+the execution of this assembly command to have the time to get the state of our 
+register. After, I ran our "funcinmem" program.
+
+  The two "push" commands before the "call" command will put our arguments on
+the stack. The %ESP register will then be moved by 2 dwords downward the
+stack.
+
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               | <-- %ebp      0xbffffa18|               | <-- %ebp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffffa08|               |
+        |---------------|                         |---------------|
+        |      0        |               0xbffffa04|      0x0      |
+        |---------------|                         |---------------|
+        |     test      | <-- %esp      0xbffffa00|   0x808e3d5   | <-- %esp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        ------
+        Figure 3.1
+
+
+------
+
+(gdb) x/4c 0x808e3d5
+0x808e3d5 <_IO_stdin_used+17>:  116 't' 101 'e' 115 's' 116 't'
+
+(gdb) info symbol 0x808e3d5
+_IO_stdin_used + 17 in section .rodata
+
+------
+
+I was curious about this address in memory, it's why I examined the memory at this 
+address and I confirmed that there was the place of the "test" argument string holed 
+in memory.
+
+I also found that this string is in the .rodata (read only data) header
+section of the ELF executable file format!
+
+------
+
+(gdb) stepi
+function (cParameter=0x1 <Address 0x1 out of bounds>, iParameter=-1073743228) at funcinmem.c:6
+6       {
+
+(gdb) info register esp
+esp            0xbffff9fc       0xbffff9fc
+
+(gdb) info register eip
+eip            0x80481e0        0x80481e0
+
+
+
+
+(gdb) info register esp
+esp            0xbffff9fc       0xbffff9fc
+(gdb) x 0xbffff9fc
+0xbffff9fc:     0x0804828c
+(gdb) x 0x0804828c
+0x804828c <main+28>:    0x8d10c483
+(gdb) disassemble main+28
+...
+0x8048287 <main+23>:    call   0x80481e0 <function>
+0x804828c <main+28>:    add    $0x10,%esp
+...
+
+------
+
+Now, we executed the "call   0x80481e0 <function>" command. %EIP was pushed on the 
+stack to continue the normal execution of our program after the "function" procedure 
+return. After, the first command of our procedure (0x80481e0 (push %ebp)) was put 
+in %EIP. After, this command was executed by him.
+
+%ESP was moved by another dword downward the memory, why? I examined the memory 
+address of our %ESP register at address 0xbffff9fc. I found that this address point 
+on 0x8d10c483 memory address. I finally disassembled this memory to find that this 
+address is the address of the "add    $0x10,%esp" command of our main function. We 
+got it! This is the address of the next command to execute after the return of our 
+"function" procedure! The %EIP register was explicitly pushed on the stack by the 
+"call" command before being assigned on 0x80481e0.
+
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               | <-- %ebp      0xbffffa18|               | <-- %ebp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffffa08|               |
+        |---------------|                         |---------------|
+        |      0        |               0xbffffa04|      0x0      |
+        |---------------|                         |---------------|
+        |     test      |               0xbffffa00|   0x808e3d5   |
+        |---------------|                         |---------------|
+        |       Z       | <-- %esp      0xbffff9fc|   0x0804828c  | <-- %esp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+
+		Z = The address to pop after the procedure call to 
+		    continue the normal execution of the program.
+
+        ------
+        Figure 3.2
+
+
+------
+
+
+
+3.4.2.2: The Prologue:
+----------------------
+
+
+ This is the assembly code of our prologue:
+ ------------------------------------------
+
+ 0x80481e0 <function>:   push   %ebp
+ 0x80481e1 <function+1>: mov    %esp,%ebp
+ 0x80481e3 <function+3>: push   %edi
+ 0x80481e4 <function+4>: push   %esi
+ 0x80481e5 <function+5>: sub    $0x30,%esp
+
+ ------
+
+        Okay, let's GDB rocks:
+
+------
+
+(gdb) break *0x80481e0
+Breakpoint 1 at 0x80481e0: file funcinmem.c, line 6.
+(gdb) run
+Starting program: /root/prog/funcinmem
+
+Breakpoint 1, function (cParameter=0x1 <Address 0x1 out of bounds>, iParameter=-1073743228) at funcinmem.c:6
+6       {
+
+------
+
+First, I putted a breakpoint on the first line of our prologue assembly code and
+I started the program. The program execution stopped at our first breakpoint,
+the "push   %ebp" command (Remember, the push command isn't called at this
+moment, the breakpoint is called before the push command).
+
+------
+
+(gdb) info register ebp
+ebp            0xbffffa18       0xbffffa18
+
+(gdb) info register esp
+esp            0xbffff9fc       0xbffff9fc
+
+------
+
+There our %EBP register point on a X memory address and %ESP at a Y memory address.
+
+        ------
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               | <-- %ebp      0xbffffa18|               | <-- %ebp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               | <-- %esp      0xbffff9fc|               | <-- %esp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+
+        ------
+        Figure 3.3
+
+------
+
+(gdb) stepi
+0x080481e1      6       {
+
+(gdb) info register ebp
+ebp            0xbffffa18       0xbffffa18
+
+(gdb) info register esp
+esp            0xbffff9f8       0xbffff9f8
+
+------
+
+We executed the last command (push   %ebp) with the "stepi" GDB command. We'll
+save the current environment by pushing on the stack the current %EBP position.
+Then, the %ESP register will decrease of one dword because we pushed %EBP on the
+stack. This is why you can see a change of the %ESP register location after the
+"push   %ebp"  command call:
+
+ 0xbffff9fc
+-
+ 0xbffff9f8
+ ----------
+ 0x00000004  ( A dword )
+
+
+        ------
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               | <-- %ebp      0xbffffa18|               | <-- %ebp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffff9fc|               |
+        |---------------|                         |---------------|
+        |       X       | <-- %esp      0xbffff9f8|  0xbffffa18   | <-- %esp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+
+        ------
+        Figure 3.4
+
+
+------
+
+(gdb) stepi
+0x080481e3 in function (cParameter=0x808e3d5 "test", iParameter=0) at funcinmem.c:6
+6       {
+
+(gdb) info register ebp
+ebp            0xbffff9f8       0xbffff9f8
+
+(gdb) info register esp
+esp            0xbffff9f8       0xbffff9f8
+
+------
+
+There we executed the "mov    %esp,%ebp" assembly command by calling the "stepi"
+GDB command. This will move the %EBP register on the %ESP one. This will create
+a new environment for our called procedure. Both %ESP and %EBP point on the same
+old environment address.
+
+        ------
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               |               0xbffffa18|               |
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffff9fc|               |
+        |---------------|                         |---------------|
+        |       X       | <-- %esp      0xbffff9f8|  0xbffffa18   | <-- %esp
+        |---------------|   |-%ebp                |---------------|   |-%ebp
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+
+        ------
+        Figure 3.5
+
+------
+
+(gdb) stepi
+0x080481e4      6       {
+
+(gdb) info register esp
+esp            0xbffff9f4       0xbffff9f4
+
+(gdb) stepi
+0x080481e5      6       {
+
+(gdb) info register esp
+esp            0xbffff9f0       0xbffff9f0
+
+------
+
+There, we save the %EDI and %ESI state by pushing them on the stack.
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               |               0xbffffa18|               |
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffff9fc|               |
+        |---------------|                         |---------------|
+        |      X        | <-- %ebp      0xbffff9f8|  0xbffffa18   | <-- %ebp
+        |---------------|                         |---------------|
+        |      V        |               0xbffff9f4|      0x1      |
+        |---------------|                         |---------------|
+        |      W        | <-- %esp      0xbffff9f0|  0xbffffa84   | <-- %esp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        ------
+
+        V = %EDI
+        W = %ESI
+
+        Figure 3.6
+
+------
+
+Bellow is the stack layout after all local and dynamic variables declarations
+and alignment by the compiler by padding the stack frame with null value dwords.
+
+(gdb) break *0x8048265
+Breakpoint 3 at 0x8048265
+
+(gdb) run
+Starting program: /root/prog/funcinmem
+
+Breakpoint 1, 0x08048265 in function (cParameter=0x808e3d5 "test", iParameter=5) at funcinmem.c:21
+
+21         strncpy(szLocalP,"Hello World!",12);
+
+(gdb) info register ebp
+ebp            0xbffff9f8       0xbffff9f8
+
+(gdb) info register esp
+esp            0xbffff9b0       0xbffff9b0
+
+(gdb) x 0xbffff9f8
+0xbffff9f8:     0xbffffa18
+------
+The saved environment of our main() function
+------
+(gdb) x 0xbffff9f4
+0xbffff9f4:     0x00000001
+------
+Saved %EDI
+------
+(gdb) x 0xbffff9f0
+0xbffff9f0:     0xbffffa84
+------
+Saved %ESI
+------
+(gdb) x 0xbffff9ec
+0xbffff9ec:     0x00000001
+------
+iLocalInit
+------
+(gdb) x 0xbffff9e8
+0xbffff9e8:     0x00000005
+------
+iLocalUnInit = iParameter;
+------
+(gdb) x 0xbffff9e4
+0xbffff9e4:     0x00000000
+------
+Padding
+------
+(gdb) x 0xbffff9e0
+0xbffff9e0:     0x00000000
+------
+Padding
+------
+(gdb) x 0xbffff9dc
+0xbffff9dc:     0x00000000
+------
+Padding
+------
+(gdb) x 0xbffff9d8
+0xbffff9d8:     0x21646c72
+------
+szHelloString ( First DWord )
+------
+(gdb) x 0xbffff9d4
+0xbffff9d4:     0x6f57206f
+------
+szHelloString ( Second DWord )
+------
+(gdb) x 0xbffff9d0
+0xbffff9d0:     0x6c6c6548
+------
+szHelloString ( Last DWord )
+------
+(gdb) x 0xbffff9cc
+0xbffff9cc:     0x080a00d8
+------
+szLocalP
+------
+(gdb) x 0xbffff9c8
+0xbffff9c8:     0x00000000
+------
+Padding
+------
+(gdb) x 0xbffff9c4
+0xbffff9c4:     0x00000000
+------
+Padding
+------
+(gdb) x 0xbffff9c0
+0xbffff9c0:     0x00000000
+------
+Padding
+------
+
+
+
+
+
+Above is the stack mapping after all local and dynamic variables declarations
+and alignment by the compiler by padding the stack frame with null value dwords.
+
+
+0x80481e5 <function+5>: sub    $0x30,%esp
+
+By this command, we'll reserve 12 dwords on the stack to put our local variables. 
+Don't forgot, the stack is managed in dword ( 4 bytes or 32 bits ). If the dword 
+isn't full, the 0x0 value is assigned for unused bytes.
+
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               |               0xbffffa18|               |
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffff9fc|               |
+        |---------------|                         |---------------|
+        |      X        | <-- %ebp      0xbffff9f8|  0xbffffa18   | <-- %ebp
+        |---------------|                         |---------------|
+        |      V        |               0xbffff9f4|      0x1      |
+        |---------------|                         |---------------|
+        |      W        |               0xbffff9f0|  0xbffffa84   |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9ec|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9e8|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9e4|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9e0|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9dc|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9d8|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9d4|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9d0|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9cc|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9c8|               |
+        |---------------|                         |---------------|
+        |   Allocated   |               0xbffff9c4|               |
+        |---------------|                         |---------------|
+        |   Allocated   | <-- %esp      0xbffff9c0|               | <-- %esp
+        |---------------|                         |---------------|
+
+
+        V = %EDI
+        W = %ESI
+
+        ------
+        Figure 3.7
+
+
+After, the memory allocation, we'll put the value of our variables
+in them. The memory now looks like that:
+
+
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               |               0xbffffa18|               |
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffff9fc|               |
+        |---------------|                         |---------------|
+        |      X        | <-- %ebp      0xbffff9f8|  0xbffffa18   | <-- %ebp
+        |---------------|                         |---------------|
+        |      V        |               0xbffff9f4|      0x1      |
+        |---------------|                         |---------------|
+        |      W        |               0xbffff9f0|  0xbffffa84   |
+        |---------------|                         |---------------|
+        |   iLocalInit  |               0xbffff9ec|  0x00000001   |
+        |---------------|                         |---------------|
+        |  iLocalUnInit |               0xbffff9e8|  0x00000005   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9e4|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9e0|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9dc|  0x00000000   |
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d8|  0x21646c72   | "!dlr"
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d4|  0x6f57206f   | "oW o"
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d0|  0x6c6c6548   | "lleH"
+        |---------------|                         |---------------|
+        |    szLocalP   |               0xbffff9cc|  0x080a00d8   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c8|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c4|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   | <-- %esp      0xbffff9c0|  0x00000000   | <-- %esp
+        |---------------|                         |---------------|
+
+
+        V = %EDI
+        W = %ESI
+
+        ------
+        Figure 3.8
+
+
+        Okay, there we need some explications. We have these local variables:
+
+   ------
+   int  iLocalInit = 1;                         /* Will take 1 dword in the stack */
+   int  iLocalUnInit;                           /* Will take 1 dword in the stack */
+   char szHelloString[12] = "Hello World!";     /* Will take 4 dwords in the stack
+                                                   In reality, 3 dwords + 1 byte but,
+                                                   don't forgot, the stack is devised
+                                                   in dwords not in bytes.        */
+   char *szLocalP;                              /* Will take 1 dword in the stack */
+   ------
+
+        In  this case, %ESP is just supposed to be decrease by 7 dwords not 12! 
+Yeah in theory this is the case but in reality this isn't. The stack allocation 
+length will vary compiler-to-compiler, operating_system-to-operating_system, and 
+architecture-to-architecture. In fact, the compiler will pad the stack frame for 
+a proper internal alignment. This is why we have 5 dwords padded with 0x00000000.
+
+        By example: if in stdint.h a signed integer is defined as 16 bits 
+( int16_t ) and not 32 bits ( int32_t ), you'll be able to put 2 signed integer 
+in a dword and not just one like our example.
+
+
+3.4.2.3: The return:
+--------------------
+
+        The return procedure will restore the environment  present before our
+function call. In our example, the environment of our main() procedure will be
+restored with same values as before the function() procedure call.
+
+        There is the assembly code of the return procedure:
+        ---------------------------------------------------
+        0x8048268 <function+136>:       lea    0xfffffff8(%ebp),%esp
+        0x804826b <function+139>:       pop    %esi
+        0x804826c <function+140>:       pop    %edi
+        0x804826d <function+141>:       pop    %ebp
+        0x804826e <function+142>:       ret
+        ------
+
+        Okay, let GDB rock another time!
+
+------
+
+(gdb) break *0x8048268
+Breakpoint 1 at 0x8048268: file funcinmem.c, line 24.
+
+(gdb) run
+Starting program: /root/prog/funcinmem
+
+Breakpoint 1, function (cParameter=0x808e3d5 "test", iParameter=5) at funcinmem.c:24
+warning: Source file is more recent than executable.
+
+24      }
+
+(gdb) info register ebp
+ebp            0xbffff9f8       0xbffff9f8
+
+(gdb) info register esp
+esp            0xbffff9c0       0xbffff9c0
+
+------
+
+First, I putted a breakpoint at the "lea    0xfffffff8(%ebp),%esp" instruction.
+After I checked the %ESP and %EBP register state before the execution of this
+command.
+
+------
+
+(gdb) stepi
+0x0804826b      24      }
+
+(gdb) info register ebp
+ebp            0xbffff9f8       0xbffff9f8
+
+(gdb) info register esp
+esp            0xbffff9f0       0xbffff9f0
+
+------
+
+I executed the "lea" command with the "stepi" gdb command. After I rechecked the 
+state of the %ESP and %EBP register. %ESP has changed. His value have increased 
+in the stack. Now, the stack looks like that:
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               |               0xbffffa18|               |
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffff9fc|               |
+        |---------------|                         |---------------|
+        |      X        | <-- %ebp      0xbffff9f8|  0xbffffa18   | <-- %ebp
+        |---------------|                         |---------------|
+        |      V        |               0xbffff9f4|      0x1      |
+        |---------------|                         |---------------|
+        |      W        | <-- %esp      0xbffff9f0|  0xbffffa84   | <-- %esp
+        |---------------|                         |---------------|
+        |   iLocalInit  |               0xbffff9ec|  0x00000001   |
+        |---------------|                         |---------------|
+        |  iLocalUnInit |               0xbffff9e8|  0x00000005   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9e4|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9e0|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9dc|  0x00000000   |
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d8|  0x21646c72   | "!dlr"
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d4|  0x6f57206f   | "oW o"
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d0|  0x6c6c6548   | "lloH"
+        |---------------|                         |---------------|
+        |    szLocalP   |               0xbffff9cc|  0x080a00d8   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c8|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c4|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c0|  0x00000000   |
+        |---------------|                         |---------------|
+
+
+        V = %EDI
+        W = %ESI
+
+        ------
+        Figure 3.9
+
+
+Okay, We putted %ESP 12 dwords upward the stack! We recover the stack with 
+his old layout, same as before the memory allocation for the dynamic and 
+local variables.
+
+------
+
+(gdb) info register edi
+edi            0xbffff9dc       -1073743396
+(gdb) info register esi
+esi            0x808e3d4        134800340
+(gdb) info register esp
+esp            0xbffff9f0       0xbffff9f0
+
+(gdb) stepi
+0x0804826c      24      }
+(gdb) info register edi
+edi            0xbffff9dc       -1073743396
+(gdb) info register esi
+esi            0xbffffa84       -1073743228
+(gdb) info register esp
+esp            0xbffff9f4       0xbffff9f4
+
+
+(gdb) stepi
+0x0804826d      24      }
+(gdb) info register edi
+edi            0x1      1
+(gdb) info register esi
+esi            0xbffffa84       -1073743228
+(gdb) info register esp
+esp            0xbffff9f8       0xbffff9f8
+
+------
+
+First, %ESI was popped from the stack, then, %ESP have increased by a dword
+in the stack. After, %EDI was also popped from the stack, then, %ESP have
+increased by another dword in the stack. So, %ESI and %EDI now have there
+old value in the environment of the main() procedure before the function()
+procedure call.
+
+The stack now looks like that:
+
+
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               |               0xbffffa18|               |
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffff9fc|               |
+        |---------------|                         |---------------|
+        |      X        | <-- %ebp      0xbffff9f8|  0xbffffa18   | <-- %ebp
+        |---------------|    |%esp                |---------------|    |%esp
+        |      V        |               0xbffff9f4|      0x1      |
+        |---------------|                         |---------------|
+        |      W        |               0xbffff9f0|  0xbffffa84   |
+        |---------------|                         |---------------|
+        |   iLocalInit  |               0xbffff9ec|  0x00000001   |
+        |---------------|                         |---------------|
+        |  iLocalUnInit |               0xbffff9e8|  0x00000005   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9e4|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9e0|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9dc|  0x00000000   |
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d8|  0x21646c72   | "!dlr"
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d4|  0x6f57206f   | "oW o"
+        |---------------|                         |---------------|
+        | szHelloString |               0xbffff9d0|  0x6c6c6548   | "lloH"
+        |---------------|                         |---------------|
+        |    szLocalP   |               0xbffff9cc|  0x080a00d8   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c8|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c4|  0x00000000   |
+        |---------------|                         |---------------|
+        |   [Padding]   |               0xbffff9c0|  0x00000000   |
+        |---------------|                         |---------------|
+
+
+        V = %EDI
+        W = %ESI
+
+        ------
+        Figure 3.10
+
+------
+
+(gdb) info register ebp
+ebp            0xbffff9f8       0xbffff9f8
+(gdb) info register esp
+esp            0xbffff9f8       0xbffff9f8
+
+(gdb) stepi
+0x0804826e in function (cParameter=0x1 <Address 0x1 out of bounds>, iParameter=-1073743228) at funcinmem.c:24
+24      }
+
+(gdb) info register ebp
+ebp            0xbffffa18       0xbffffa18
+(gdb) info register esp
+esp            0xbffff9fc       0xbffff9fc
+
+------
+
+The %ESP and %EBP registers was at the same memory address. After %EBP was 
+popped from the stack. The result of this popping is that %EBP now point on 
+his old memory position. By this pop command, the %ESP register as increased 
+by 1 dwords in the memory and now he also point on his old memory address!
+
+------
+
+(gdb) info register esp
+esp            0xbffff9fc       0xbffff9fc
+(gdb) info register eip
+eip            0x804826e        0x804826e
+
+(gdb) stepi
+0x0804828c in main (argc=1, argv=0xbffffa84) at funcinmem.c:30
+30         function("test",0);
+
+(gdb) info register esp
+esp            0xbffffa00       0xbffffa00
+(gdb) info register eip
+eip            0x804828c        0x804828c
+
+------
+
+If you remember in the section 3.4.2.1, the call command have pushed %EIP 
+on the stack. So, the "ret" command will explicitly "pop" the %EIP register 
+of the stack. Then, %ESP is increased by another dwords in the memory stack 
+and he is now pointing on  the old first parameter of the function() procedure. 
+Finally, %EIP is ready to execute the next command of the main() procedure.
+
+
+
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      X |               | <-- %ebp      0xbffffa18|               | <-- %ebp
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        |               |                         |               |
+        |---------------|                         |---------------|
+      Y |               |               0xbffffa08|               |
+        |---------------|                         |---------------|
+        |      0        |               0xbffffa04|      0x0      |
+        |---------------|                         |---------------|
+        |     test      |               0xbffffa00|   0x808e3d5   | <-- %esp
+        |---------------|                         |---------------|
+        |       Z       | <-- %esp      0xbffff9fc|   0x0804828c  |
+        |---------------|                         |---------------|
+        |               |                         |               |
+        |               |                         |               |
+        ------
+        Figure 3.11
+
+
+
+3.5: The Heap:
+--------------
+
+        The heap is a memory zone dynamically allocated by an application. As we
+know, global uninitialised variable are defined in the .bss ELF header section.
+In counter part, local uninitialised variables are defined in the stack ( as we
+saw above ). The heap will come up if the length of the memory zone to allocate 
+isn't known at the compilation. In fact, the length of an integer is know at the 
+compilation. Depending of his definition in stdint.h, in a x86 architecture the
+length of the integer will be 32bits. So, the value of a global uninitilised integer 
+will be store in the .bss segment and in the case of a local uninitialised integer, 
+the value will be stored in the stack. But, this is not the case for a dynamic 
+variable. Remember the definition of a dynamic variable: a dynamic variable is the 
+memory zone targeted by a pointer. If we put these two definitions together, dynamic 
+variables will be put in the heap, because the length of a dynamic variable can 
+change at anytime during the program execution and, the heap, is structured to 
+allocate dynamically the memory at anytime in the heap. But don't forgot, the pointer 
+is the address where the memory block is in memory and, the length of a pointer is 
+know at the compilation ( 32bits ) in this case, a global and a local pointer will 
+always be defined respectively in the .bss and the stack ( like an integer ).
+
+        There is what the .bss section look like after our local and global variables 
+initialisations:
+
+
+                |               |
+                |      Heap     |
+       0x809fe04|---------------|
+                |               |     <----
+               ///             ///      |
+                |               |       |
+                |---------------|       |
+       0x809f8c8|   szGlobalP   |       | BSS
+                |---------------|       | Segment
+       0x809f8c4| iGlobalUnInit |       |
+                |---------------|       |
+                |               |       |
+               ///             ///      |
+                |               |     <----
+       0x809ee80|---------------|
+                |      Data     |
+                |               |
+                ------
+                Figure 3.12
+
+
+Our two global uninitialised variables are now in the .bss header section.
+But now, we want to know what the heap will look like after the
+initialisation of our dynamic variable in the function() procedure. Yes,
+let GDB rock another time:
+
+Before continuing, you need to have in mind that the heap will grow upward
+the user stack frame and not downward like the stack.
+
+------
+
+(gdb) info symbol &szGlobalP
+szGlobalP in section .bss
+(gdb) print &szGlobalP
+$1 = (char **) 0x809f8c8
+(gdb) print szGlobalP
+$2 = 0x80a00c8 "Hello World!\021"
+
+(gdb) x/4c 0x80a00c8
+0x80a00c8:      72 'H'  101 'e' 108 'l' 108 'l'
+(gdb) x/4c 0x80a00cc
+0x80a00cc:      111 'o' 32 ' '  87 'W'  111 'o'
+(gdb) x/4c 0x80a00d0
+0x80a00d0:      114 'r' 108 'l' 100 'd' 33 '!'
+(gdb) x/4c 0x80a00d4
+0x80a00d4:      17 '\021'       0 '\000'        0 '\000'        0 '\000'
+
+
+(gdb) info symbol &szLocalP
+No symbol matches &szLocalP.
+(gdb) print &szLocalP
+$5 = (char **) 0xbffff9cc
+(gdb) print szLocalP
+$6 = 0x80a00d8 "Hello World!!\017"
+
+(gdb) x/4c 0x80a00d8
+0x80a00d8:      72 'H'  101 'e' 108 'l' 108 'l'
+(gdb) x/4c 0x80a00dc
+0x80a00dc:      111 'o' 32 ' '  87 'W'  111 'o'
+(gdb) x/4c 0x80a00e0
+0x80a00e0:      114 'r' 108 'l' 100 'd' 33 '!'
+(gdb) x/4c 0x80a00e4
+0x80a00e4:      33 '!'  15 '\017'       0 '\000'        0 '\000'
+
+------
+Note 1: There isn't any symbol defined for szLocalP because he is initialised
+        in the stack.
+
+
+       Finally, the heap look like this after the execution of the function()
+procedure:
+
+                  3   2   1   0
+
+                |               |
+                |     Stack     |
+                |---------------|
+                |               |
+               ///             ///
+                |               |
+                |---------------|
+       0x80a00e4|0x0|0x0|0x0|017| <--|--
+                |---------------|    |
+       0x80a00e0| ! | d | l | r |    |
+                |---------------|    | szLocalP
+       0x80a00dc| o | W |\32| o |    |
+                |---------------|    |
+       0x80a00d8| l | l | e | H | <--|--
+                |---------------|
+       0x80a00d4|0x0|0x0|0x0|021| <--|--
+                |---------------|    |
+       0x80a00d0| ! | d | l | r |    |
+                |---------------|    | szGlobalP
+       0x80a00cc| o | W |\32| o |    |
+                |---------------|    |
+       0x80a00c8| l | l | e | H | <--|--
+                |---------------|
+                |               |
+               ///             ///
+                |               |
+       0x809fe08|---------------|
+                |     BSS       |
+                |               |
+                ------
+                Figure 3.13
+
+
+        The heap is referred as the breakpoint. If you need to share more dynamic 
+memory, you'll need to move the break point. A system call is used to tell to the 
+kernel that the application needs more dynamic memory. Then, the kernel will perform 
+some routines, after receiving the BRK system call, to know if he can move the 
+breakpoint upward in the user stack frame to allocate more memory. If the operation 
+is successful, the kernel will change every process table with the new information 
+and the heap size will increase in the user stack frame. If there isn't enough memory 
+for the allocation request by BRK, then the kernel will return -1 and the application 
+won't be able to allocation memory for the dynamic variable.
+
+
+
+The Conclusion:
+--------------------------
+
+        Finally, I wish that you had the same fun to read it that I had to do it. I 
+think that there is many helpful sections not just to understand how a program is 
+mapped in memory and how he his executed but also to understand how basic concepts 
+of programming work in high level programming language. I also think that this method 
+by "dissection" is the most visual one to understand the concept.
+
+        Methods used above can easily be used to understand how a high level
+programming language work, how a certain compiler work and how an architecture
+work. For example, we can easily understand the impact of global variables on the 
+system by understanding his mapping in the memory. We also can understand how C 
+variables type work on the system by debugging the application and searching in which 
+symbol the variable is defined in the header and after, will know if the size is 
+static or dynamic, if the variable is global or local, etc.
+
+        Understanding how programs are mapped in memory is understanding how programs 
+really work.
+
+
+
+
+        If you have any question, comments, adding or error to report, please send 
+me an email at : fred@decatomb.com
+
+
+        I'm sorry for my bad English but, if you find grammar errors and are
+willing to report them, please contact me and I'll change the text with pleasures.
+
+
+
+
+
+
+
+
+
+
+
+
+================================================================================
+================================================================================
+
+
+Annex 1 :
+---------
+
+                do_fork() - Function Code - src/mm/forkexit.c
+                ---------------------------------------------
+
+
+
+/*===========================================================================*
+ *                              do_fork                                      *
+ *===========================================================================*/
+01 PUBLIC int do_fork()
+02 {
+03 /* The process pointed to by 'mp' has forked.  Create a child process. */
+04
+05  register struct mproc *rmp;   /* pointer to parent */
+06  register struct mproc *rmc;   /* pointer to child */
+07  int i, child_nr, t;
+08  phys_clicks prog_clicks, child_base = 0;
+09  phys_bytes prog_bytes, parent_abs, child_abs; /* Intel only */
+10
+11  /* If tables might fill up during FORK, don't even start since recovery half
+12  * way through is such a nuisance.
+13  */
+14  rmp = mp;
+15  if (procs_in_use == NR_PROCS) return(EAGAIN);
+16  if (procs_in_use >= NR_PROCS-LAST_FEW && rmp->mp_effuid != 0)return(EAGAIN);
+17
+18  /* Determine how much memory to allocate.  Only the data and stack need to
+19   * be copied, because the text segment is either shared or of zero length.
+20   */
+21  prog_clicks = (phys_clicks) rmp->mp_seg[S].mem_len;
+22  prog_clicks += (rmp->mp_seg[S].mem_vir - rmp->mp_seg[D].mem_vir);
+23  #if (SHADOWING == 0)
+24    prog_bytes = (phys_bytes) prog_clicks << CLICK_SHIFT;
+25  #endif
+26  if ( (child_base = alloc_mem(prog_clicks)) == NO_MEM) return(ENOMEM);
+27
+28  #if (SHADOWING == 0)
+29    /* Create a copy of the parent's core image for the child. */
+30    child_abs = (phys_bytes) child_base << CLICK_SHIFT;
+31    parent_abs = (phys_bytes) rmp->mp_seg[D].mem_phys << CLICK_SHIFT;
+32    i = sys_copy(ABS, 0, parent_abs, ABS, 0, child_abs, prog_bytes);
+33    if (i < 0) panic("do_fork can't copy", i);
+34  #endif
+35
+36  /* Find a slot in 'mproc' for the child process.  A slot must exist. */
+37  for (rmc = &mproc[0]; rmc < &mproc[NR_PROCS]; rmc++)
+38        if ( (rmc->mp_flags & IN_USE) == 0) break;
+39
+40  /* Set up the child and its memory map; copy its 'mproc' slot from parent. */
+41  child_nr = (int)(rmc - mproc);        /* slot number of the child */
+42  procs_in_use++;
+43  *rmc = *rmp;                  /* copy parent's process slot to child's */
+44
+45  rmc->mp_parent = who;         /* record child's parent */
+46  rmc->mp_flags &= ~TRACED;     /* child does not inherit trace status */
+47  #if (SHADOWING == 0)
+48    /* A separate I&D child keeps the parents text segment.  The data and stack
+49     * segments must refer to the new copy.
+50     */
+51    if (!(rmc->mp_flags & SEPARATE)) rmc->mp_seg[T].mem_phys = child_base;
+52    rmc->mp_seg[D].mem_phys = child_base;
+53    rmc->mp_seg[S].mem_phys = rmc->mp_seg[D].mem_phys +
+54                        (rmp->mp_seg[S].mem_vir - rmp->mp_seg[D].mem_vir);
+55  #endif
+56  rmc->mp_exitstatus = 0;
+57  rmc->mp_sigstatus = 0;
+58
+59  /* Find a free pid for the child and put it in the table. */
+60  do {
+61        t = 0;                  /* 't' = 0 means pid still free */
+62        next_pid = (next_pid < 30000 ? next_pid + 1 : INIT_PID + 1);
+63        for (rmp = &mproc[0]; rmp < &mproc[NR_PROCS]; rmp++)
+64                if (rmp->mp_pid == next_pid || rmp->mp_procgrp == next_pid) {
+65                        t = 1;
+66                        break;
+67                }
+68        rmc->mp_pid = next_pid; /* assign pid to child */
+69  } while (t);
+70  /* Tell kernel and file system about the (now successful) FORK. */
+71  sys_fork(who, child_nr, rmc->mp_pid, child_base); /* child_base is 68K only*/
+72  tell_fs(FORK, who, child_nr, rmc->mp_pid);
+73
+74  #if (SHADOWING == 0)
+75    /* Report child's memory map to kernel. */
+76    sys_newmap(child_nr, rmc->mp_seg);
+77  #endif
+78
+79  /* Reply to child to wake it up. */
+80  reply(child_nr, 0, 0, NIL_PTR);
+81  return(next_pid);              /* child's pid */
+82  }
+
+
+------
+
+
+
+
+Annex 2 :
+---------
+
+                Process Table definition - src/kernel/proc.h
+                --------------------------------------------
+
+
+struct proc {
+  struct stackframe_s p_reg;    /* process' registers saved in stack frame */
+
+#if (CHIP == INTEL)
+  reg_t p_ldt_sel;              /* selector in gdt giving ldt base and limit*/
+  struct segdesc_s p_ldt[2];    /* local descriptors for code and data */
+                                /* 2 is LDT_SIZE - avoid include protect.h */
+#endif /* (CHIP == INTEL) */
+
+#if (CHIP == M68000)
+  reg_t p_splow;                /* lowest observed stack value */
+  int p_trap;                   /* trap type (only low byte) */
+#if (SHADOWING == 0)
+  char *p_crp;                  /* mmu table pointer (really struct _rpr *) */
+#else
+  phys_clicks p_shadow;         /* set if shadowed process image */
+  int align;                    /* make the struct size a multiple of 4 */
+#endif
+  int p_nflips;                 /* statistics */
+  char p_physio;                /* cannot be (un)shadowed now if set */
+#if defined(FPP)
+  struct fsave p_fsave;         /* FPP state frame and registers */
+  int align2;                   /* make the struct size a multiple of 4 */
+#endif
+#endif /* (CHIP == M68000) */
+
+  reg_t *p_stguard;             /* stack guard word */
+
+  int p_nr;                     /* number of this process (for fast access) */
+
+  int p_int_blocked;            /* nonzero if int msg blocked by busy task */
+  int p_int_held;               /* nonzero if int msg held by busy syscall */
+  struct proc *p_nextheld;      /* next in chain of held-up int processes */
+
+  int p_flags;                  /* P_SLOT_FREE, SENDING, RECEIVING, etc. */
+  struct mem_map p_map[NR_SEGS];/* memory map */
+  pid_t p_pid;                  /* process id passed in from MM */
+
+  clock_t user_time;            /* user time in ticks */
+  clock_t sys_time;             /* sys time in ticks */
+  clock_t child_utime;          /* cumulative user time of children */
+  clock_t child_stime;          /* cumulative sys time of children */
+  clock_t p_alarm;              /* time of next alarm in ticks, or 0 */
+
+  struct proc *p_callerq;       /* head of list of procs wishing to send */
+  struct proc *p_sendlink;      /* link to next proc wishing to send */
+  message *p_messbuf;           /* pointer to message buffer */
+  int p_getfrom;                /* from whom does process want to receive? */
+  int p_sendto;
+
+  struct proc *p_nextready;     /* pointer to next ready process */
+  sigset_t p_pending;           /* bit map for pending signals */
+  unsigned p_pendcount;         /* count of pending and unfinished signals */
+
+  char p_name[16];              /* name of the process */
+};
+
+
+------
+
+
+Annex 3:
+--------
+
+
+
+001 /*===========================================================================*
+002 *                              do_exec                                      *
+003 *===========================================================================*/
+004 PUBLIC int do_exec()
+005 {
+006 /* Perform the execve(name, argv, envp) call.  The user library builds a
+007 * complete stack image, including pointers, args, environ, etc.  The stack
+008 * is copied to a buffer inside MM, and then to the new core image.
+009 */
+010
+011  register struct mproc *rmp;
+012  struct mproc *sh_mp;
+013  int m, r, fd, ft, sn;
+014  static char mbuf[ARG_MAX];    /* buffer for stack and zeroes */
+015  static char name_buf[PATH_MAX]; /* the name of the file to exec */
+016  char *new_sp, *basename;
+017  vir_bytes src, dst, text_bytes, data_bytes, bss_bytes, stk_bytes, vsp;
+018  phys_bytes tot_bytes;         /* total space for program, including gap */
+019  long sym_bytes;
+020  vir_clicks sc;
+021  struct stat s_buf;
+022  vir_bytes pc;
+023  /* Do some validity checks. */
+024  rmp = mp;
+025  stk_bytes = (vir_bytes) stack_bytes;
+026  if (stk_bytes > ARG_MAX) return(ENOMEM);      /* stack too big */
+027  if (exec_len <= 0 || exec_len > PATH_MAX) return(EINVAL);
+028
+029  /* Get the exec file name and see if the file is executable. */
+030  src = (vir_bytes) exec_name;
+031  dst = (vir_bytes) name_buf;
+032  r = sys_copy(who, D, (phys_bytes) src,
+033                MM_PROC_NR, D, (phys_bytes) dst, (phys_bytes) exec_len);
+034  if (r != OK) return(r);       /* file name not in user data segment */
+035  tell_fs(CHDIR, who, FALSE, 0);        /* switch to the user's FS environ. */
+036  fd = allowed(name_buf, &s_buf, X_BIT);        /* is file executable? */
+037  if (fd < 0) return(fd);       /* file was not executable */
+038
+039  /* Read the file header and extract the segment sizes. */
+040  sc = (stk_bytes + CLICK_SIZE - 1) >> CLICK_SHIFT;
+041  m = read_header(fd, &ft, &text_bytes, &data_bytes, &bss_bytes,
+042                                        &tot_bytes, &sym_bytes, sc, &pc);
+043  if (m < 0) {
+044        close(fd);              /* something wrong with header */
+045        return(ENOEXEC);
+046  }
+047
+048  /* Fetch the stack from the user before destroying the old core image. */
+049  src = (vir_bytes) stack_ptr;
+050  dst = (vir_bytes) mbuf;
+051  r = sys_copy(who, D, (phys_bytes) src,
+052                        MM_PROC_NR, D, (phys_bytes) dst, (phys_bytes)stk_bytes);
+053 if (r != OK) {
+054        close(fd);              /* can't fetch stack (e.g. bad virtual addr) */
+055        return(EACCES);
+056  }
+057
+058  /* Can the process' text be shared with that of one already running? */
+059  sh_mp = find_share(rmp, s_buf.st_ino, s_buf.st_dev, s_buf.st_ctime);
+060
+061  /* Allocate new memory and release old memory.  Fix map and tell kernel. */
+062  r = new_mem(sh_mp, text_bytes, data_bytes, bss_bytes, stk_bytes, tot_bytes);
+063  if (r != OK) {
+064        close(fd);              /* insufficient core or program too big */
+065        return(r);
+066  }
+067
+068  /* Save file identification to allow it to be shared. */
+069  rmp->mp_ino = s_buf.st_ino;
+070  rmp->mp_dev = s_buf.st_dev;
+071  rmp->mp_ctime = s_buf.st_ctime;
+072
+073  /* Patch up stack and copy it from MM to new core image. */
+074  vsp = (vir_bytes) rmp->mp_seg[S].mem_vir << CLICK_SHIFT;
+075  vsp += (vir_bytes) rmp->mp_seg[S].mem_len << CLICK_SHIFT;
+076  vsp -= stk_bytes;
+077  patch_ptr(mbuf, vsp);
+078  src = (vir_bytes) mbuf;
+079  r = sys_copy(MM_PROC_NR, D, (phys_bytes) src,
+080                        who, D, (phys_bytes) vsp, (phys_bytes)stk_bytes);
+081  if (r != OK) panic("do_exec stack copy err", NO_NUM);
+082
+083  /* Read in text and data segments. */
+084  if (sh_mp != NULL) {
+085        lseek(fd, (off_t) text_bytes, SEEK_CUR);  /* shared: skip text */
+086  } else {
+087        load_seg(fd, T, text_bytes);
+088  }
+089  load_seg(fd, D, data_bytes);
+090
+091 #if (SHADOWING == 1)
+092   if (lseek(fd, (off_t)sym_bytes, SEEK_CUR) == (off_t) -1) ;    /* error */
+093   if (relocate(fd, (unsigned char *)mbuf) < 0)  ;               /* error */
+094   pc += (vir_bytes) rp->mp_seg[T].mem_vir << CLICK_SHIFT;
+095 #endif
+096
+097 close(fd);                    /* don't need exec file any more */
+098
+099  /* Take care of setuid/setgid bits. */
+100  if ((rmp->mp_flags & TRACED) == 0) { /* suppress if tracing */
+101        if (s_buf.st_mode & I_SET_UID_BIT) {
+102                rmp->mp_effuid = s_buf.st_uid;
+103                tell_fs(SETUID,who, (int)rmp->mp_realuid, (int)rmp->mp_effuid);
+104        }
+105        if (s_buf.st_mode & I_SET_GID_BIT) {
+106                rmp->mp_effgid = s_buf.st_gid;
+107                tell_fs(SETGID,who, (int)rmp->mp_realgid, (int)rmp->mp_effgid);
+108        }
+109  }
+110
+111  * Save offset to initial argc (for ps) */
+112  rmp->mp_procargs = vsp;
+113
+114  /* Fix 'mproc' fields, tell kernel that exec is done,  reset caught sigs. */
+115  for (sn = 1; sn <= _NSIG; sn++) {
+116        if (sigismember(&rmp->mp_catch, sn)) {
+117                sigdelset(&rmp->mp_catch, sn);
+118                rmp->mp_sigact[sn].sa_handler = SIG_DFL;
+119                sigemptyset(&rmp->mp_sigact[sn].sa_mask);
+120        }
+121  }
+122
+123  rmp->mp_flags &= ~SEPARATE;   /* turn off SEPARATE bit */
+124  rmp->mp_flags |= ft;          /* turn it on for separate I & D files */
+125  new_sp = (char *) vsp;
+126
+127  tell_fs(EXEC, who, 0, 0);     /* allow FS to handle FD_CLOEXEC files */
+128
+129  /* System will save command line for debugging, ps(1) output, etc. */
+130  basename = strrchr(name_buf, '/');
+131  if (basename == NULL) basename = name_buf; else basename++;
+132  sys_exec(who, new_sp, rmp->mp_flags & TRACED, basename, pc);
+133  return(OK);
+134 }
+
+
+
+------
+
+
+
+
+Bibliography:
+-------------
+
+
+-Andrew S. Tanenbaum and Albert S. Woodhull, "Operating System, Design and Implementation. Second Edition", Prentice Hall, Upper Saddle River, New Jersy 07458, 1997, p.939.
+-David A Rusling, "The Linux Kernel", http://www.linuxdoc.org/LDP/tlk/tlk-title.html, 1999.
+-George F. Corliss,"Minix_book",http://www.mscs.mu.edu/~georgec/Classes/207.1998/14Minix_book/, 1998.
+
+
+
+Minix source snippets are: Copyright (c) 1987,1997, Prentice Hall. All rights reserved.
+
+
+
+
+
+
+
+(c) Copyright 2001 Frédérick Giasson, All Rights Reserved 

@@ -1,0 +1,31 @@
+Command	APT	YUM	RPM
+Meaning	Advanced Package Tool	Yellow dog (Linux) Updater, Modified	Red Hat Package Manager
+File Extension	*.deb	*.rpm	*.rpm
+(Remote) Repository location config	/etc/apt/sources.list	/etc/yum.conf	N/A
+Update package index or header files from remote sources	aptitude update (apt-list update)	N/A (yum does this every time it's run, use -C to avoid this slow behavior)	N/A
+Install new packages	aptitude install [args]	yum install [args]	rpm -Uvh [args]
+Remove packages	aptitude remove [args]	yum remove [args]	rpm -e [args]
+Find packages that you can install	apt-cache search [args]	yum search [args]	N/A
+Show information about a package that is not installed [1]	apt-cache show [args]	yum list [args]	rpm -qip [args]
+Show information about an installed package	apt-cache show [args]	yum info [args]	rpm -qi [args]
+List the contents (files) of a package that is not installed [1]	dpkg -L [args] (apt-file show [args])		rpm -qlp [args]
+List the contents (files) of an installed package	dpkg -L [args] (apt-file show [args])		rpm -ql [args]
+Check for upgrades	aptitude -s upgrade apt-get -s dist-upgrade	yum check-update	N/A
+Upgrade packages	aptitude dist-upgrade	yum update	rpm -Uvh [args]
+Upgrade entire system	aptitude dist-upgrade	yum upgrade	N/A
+Show the package to which a file belongs	dpkg-query -S  (apt-file search )	yum provides yum whatprovides	rpm -q --whatprovides 
+Remove packages from the local cache directory	aptitude clean	yum clean packages	N/A
+Remove only obsolete packages from the local cache directory	aptitude autoclean	N/A	N/A
+Remove header files from the local cache directory, forcing a new download of same on next use	apt-file purge	yum clean headers	N/A
+Remove obsolete header files from the local cache directory	N/A	yum clean oldheaders	N/A
+Run yum clean packages and yum clean oldheaders	N/A	yum clean all	N/A
+Show stats about the package cache	apt-cache stats		
+Show the packages a given package depends on	apt-cache depends		
+Show other packages that depend on a given package (reverse dependency)	apt-cache rdepends		rpm -q -whatrequires [args]
+Show information about the packages	apt-cache showpkg [args]		
+Show the names, version and other information for all installed packages	dpkg -l		rpm -qa
+Verify all installed packages	debsums		rpm -Va
+Show what has been changed in a new version of a package	apt-listchanges		rpm -q -changelog [args]
+Lists available package versions with distribution	apt-show-versions		
+Query the package database	dpkg-query		rpm -q
+Show the list of all the packages in the cache	apt-cache pkgnames		
